@@ -11,7 +11,7 @@ struct terminal_attributes {
 struct terminal_attributes buffer[width * height];
 ```
 
-Display functions stored in:
+Modular display functions stored in:
 * `opengl.c`
 * `xcb.c`
 * `metal.m`
