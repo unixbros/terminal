@@ -27,7 +27,7 @@ struct gfxinternals {
 	char fontline[1024]; /* XXX different size? */
 	xcb_key_symbols_t *keysyms;
 
-	off_t width, height;
+	int width, height;
 	struct tattr *map;
 	int ttydead;
 	int wants_redraw;
@@ -173,7 +173,7 @@ redraw(void) {
 	i = 0;
 	for (x = 0; x < t.width; x++)
 		for (y = 0; y < t.height; y++)
-			if (t.map[i].draw)
+			if (t.map[x + (y * t.width)].draw)
 				xcb_poly_text_16_simple(t.conn, t.win, t.gc,
 					x * t.font->width,
 					y * t.font->height,
