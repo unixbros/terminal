@@ -3,6 +3,7 @@ struct tattr {
 	uint8_t fg;
 	uint8_t bg;
 	uint8_t attr;
+	uint8_t draw;
 };
 
 struct video_fcn_tbl {

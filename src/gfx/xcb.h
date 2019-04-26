@@ -1,5 +1,7 @@
 #include <xcb/xcb.h>
 #include <xcb/xcb_keysyms.h>
+#include <xcb/xcb_aux.h>
+#include <xcb/xcbext.h>
 #include <sys/ioctl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -115,32 +117,88 @@ resize(int x, int y) {
 	*/
 }
 
+/*
+ * thanks for wmdia for doing what xcb devs can't
+ */
+xcb_void_cookie_t
+xcb_poly_text_16_simple(xcb_connection_t *c, xcb_drawable_t drawable,
+		xcb_gcontext_t gc, int16_t x, int16_t y, uint32_t len,
+		const uint16_t *str)
+{
+	struct iovec xcb_parts[7];
+	static const xcb_protocol_request_t xcb_req = {
+		5,                /* count  */
+		0,                /* ext    */
+		XCB_POLY_TEXT_16, /* opcode */
+		1                 /* isvoid */
+	};
+	uint8_t xcb_lendelta[2];
+	xcb_void_cookie_t xcb_ret;
+	xcb_poly_text_8_request_t xcb_out;
+
+	xcb_out.pad0 = 0;
+	xcb_out.drawable = drawable;
+	xcb_out.gc = gc;
+	xcb_out.x = x;
+	xcb_out.y = y;
+
+	xcb_lendelta[0] = len;
+	xcb_lendelta[1] = 0;
+
+	xcb_parts[2].iov_base = (char *)&xcb_out;
+	xcb_parts[2].iov_len = sizeof(xcb_out);
+	xcb_parts[3].iov_base = 0;
+	xcb_parts[3].iov_len = -xcb_parts[2].iov_len & 3;
+
+	xcb_parts[4].iov_base = xcb_lendelta;
+	xcb_parts[4].iov_len = sizeof(xcb_lendelta);
+	xcb_parts[5].iov_base = (char *)str;
+	xcb_parts[5].iov_len = len * sizeof(int16_t);
+
+	xcb_parts[6].iov_base = 0;
+	xcb_parts[6].iov_len = -(xcb_parts[4].iov_len + xcb_parts[5].iov_len)
+		& 3;
+
+	xcb_ret.sequence = xcb_send_request(c, 0, xcb_parts + 2, &xcb_req);
+
+	return xcb_ret;
+}
+
 void
 redraw(void) {
-	/* stub */
+	int x, y, i;
+
+	warnx("redrawing");
+
+	i = 0;
+	for (x = 0; x < t.width; x++)
+		for (y = 0; y < t.height; y++)
+			if (t.map[i].draw)
+				xcb_poly_text_16_simple(t.conn, t.win, t.gc,
+					x * t.font->width,
+					y * t.font->height,
+					1, &t.map[x + (y * t.width)].utf);
+
+	xcb_flush(t.conn);
 }
 
 xcb_keysym_t
-xcb_get_keysym(xcb_keycode_t keycode, uint16_t state)
-{
+xcb_get_keysym(xcb_keycode_t keycode, uint16_t state) {
 	if (!(t.keysyms = xcb_key_symbols_alloc(t.conn)))
 		return 0;
 
-	xcb_keysym_t sym = xcb_key_symbols_get_keysym(t.keysyms, keycode, state);
-
-	return sym;
+	return xcb_key_symbols_get_keysym(t.keysyms, keycode, state);
 }
 
 void
 set_cell(int x, int y, char *str) {
 	uint16_t c;
 	uint8_t *utf = (uint8_t *)str;
-
-	off_t pos;
+	int pos;
 
 	pos = x + (y * t.width);
-	c = utf_combine(str);
-	t.map[pos].utf = c;
+	t.map[pos].utf = utf_combine(str);
+	t.map[pos].draw = 1;
 	/* XXX fix later
 	term.map[pos].fg = t.fg;
 	term.map[pos].bg = t.bg;
@@ -192,6 +250,11 @@ xcb_loop(void) {
 			if (xcb_connection_has_error(t.conn))
 				err(1, "connection to X11 broken");
 
+			if (t.wants_redraw) {
+				redraw();
+				t.wants_redraw = 0;
+			}
+
 			gfx.cb_loop();
 		} else {
 			switch (ev->response_type & ~0x80) {
@@ -203,7 +266,7 @@ xcb_loop(void) {
 				xcb_keysym_t keysym, key;
 
 				e = (xcb_key_press_event_t *)ev;
-				key = xcb_get_keysym(e->detail, 0);
+				key = xcb_get_keysym(e->detail, e->state);
 
 				gfx.cb_keypress(key, e->state);
 			} break;
@@ -211,7 +274,8 @@ xcb_loop(void) {
 				xcb_button_press_event_t *e;
 
 				e = (xcb_button_press_event_t *)ev;
-				gfx.cb_buttonpress(e->root_x, e->root_y);
+				gfx.cb_buttonpress(e->root_x / t.font->width,
+						e->root_y / t.font->height);
 			} break;
 			case XCB_CONFIGURE_NOTIFY: {
 				/* resize? */
@@ -236,11 +300,12 @@ xcb_init(void) {
 
 	t.scr = xcb_setup_roots_iterator(xcb_get_setup(t.conn)).data;
 
-	mask = XCB_CW_EVENT_MASK;
-	values[0]  = XCB_EVENT_MASK_EXPOSURE;
-	values[0] |= XCB_EVENT_MASK_KEY_PRESS;
-	values[0] |= XCB_EVENT_MASK_BUTTON_PRESS;
-	values[0] |= XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY;
+	mask = XCB_CW_EVENT_MASK | XCB_CW_BACK_PIXEL;
+	values[0]  = 0;
+	values[1]  = XCB_EVENT_MASK_EXPOSURE;
+	values[1] |= XCB_EVENT_MASK_KEY_PRESS;
+	values[1] |= XCB_EVENT_MASK_BUTTON_PRESS;
+	values[1] |= XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY;
 
 	t.win = xcb_generate_id(t.conn);
 
@@ -251,15 +316,26 @@ xcb_init(void) {
 
 	xcb_map_window(t.conn, t.win);
 
-	mask = XCB_GC_GRAPHICS_EXPOSURES;
-	values[0] = 0;
+	mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
+	values[0] = 0xffffff;
+	values[1] = 0;
 	t.gc = xcb_generate_id(t.conn);
 	xcb_create_gc(t.conn, t.gc, t.win, mask, values);
 
 	t.font = load_font(t.gc, t.fontline);
 	resize(80, 24);
-
 	xcb_flush(t.conn);
+
+	/* DEBUG */
+	char a[] = "A";
+	set_cell(0, 0, a);
+	set_cell(1, 1, a);
+	set_cell(2, 1, a);
+	set_cell(3, 1, a);
+	set_cell(3, 2, a);
+
+	t.wants_redraw = 1;
+	redraw();
 }
 
 void
