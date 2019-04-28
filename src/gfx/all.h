@@ -6,6 +6,10 @@ struct tattr {
 	uint8_t draw;
 };
 
+struct xy {
+	int x, y;
+};
+
 struct video_fcn_tbl {
 	/* XXX fix explicit args */
 
@@ -27,3 +31,8 @@ struct video_fcn_tbl {
 	void (*cb_loop)(void);
 };
 
+struct config {
+	int padding;
+	int bg;
+	int fg;
+};

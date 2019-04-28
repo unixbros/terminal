@@ -10,6 +10,7 @@
 #include "all.h"
 
 struct video_fcn_tbl gfx;
+extern struct config c;
 
 struct font {
 	xcb_font_t ptr;
@@ -26,6 +27,7 @@ struct gfxinternals {
 	struct font *font;
 	char fontline[1024]; /* XXX different size? */
 	xcb_key_symbols_t *keysyms;
+	struct xy cursor;
 
 	int width, height;
 	struct tattr *map;
@@ -89,8 +91,8 @@ resize(int x, int y) {
 	struct winsize ws;
 
 	mask = XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT;
-	values[0] = t.font->width  * x;
-	values[1] = t.font->height * y;
+	values[0] = (t.font->width  * (x + 1)) + (c.padding * 2);
+	values[1] = (t.font->height * (y + 1)) + (c.padding * 2);
 	xcb_configure_window(t.conn, t.win, mask, values);
 
 	ret = malloc(sizeof(struct tattr) * (x * y));
@@ -169,14 +171,15 @@ redraw(void) {
 	int x, y, i;
 
 	warnx("redrawing");
+	t.wants_redraw = 0;
 
 	i = 0;
 	for (x = 0; x < t.width; x++)
 		for (y = 0; y < t.height; y++)
 			if (t.map[x + (y * t.width)].draw)
 				xcb_poly_text_16_simple(t.conn, t.win, t.gc,
-					x * t.font->width,
-					y * t.font->height,
+					((x + 1) * t.font->width) + c.padding,
+					((y + 1) * t.font->height) + c.padding,
 					1, &t.map[x + (y * t.width)].utf);
 
 	xcb_flush(t.conn);
@@ -188,6 +191,17 @@ xcb_get_keysym(xcb_keycode_t keycode, uint16_t state) {
 		return 0;
 
 	return xcb_key_symbols_get_keysym(t.keysyms, keycode, state);
+}
+
+void
+next_cell(void) {
+	if (t.cursor.x + 1 >= t.width) {
+		t.cursor.y++;
+		t.cursor.x = 0;
+	} else
+		t.cursor.x++;
+
+	/* if t.cursor.y >= t.height; scroll */
 }
 
 void
@@ -250,10 +264,8 @@ xcb_loop(void) {
 			if (xcb_connection_has_error(t.conn))
 				err(1, "connection to X11 broken");
 
-			if (t.wants_redraw) {
+			if (t.wants_redraw)
 				redraw();
-				t.wants_redraw = 0;
-			}
 
 			gfx.cb_loop();
 		} else {
@@ -301,7 +313,7 @@ xcb_init(void) {
 	t.scr = xcb_setup_roots_iterator(xcb_get_setup(t.conn)).data;
 
 	mask = XCB_CW_EVENT_MASK | XCB_CW_BACK_PIXEL;
-	values[0]  = 0;
+	values[0]  = c.bg;
 	values[1]  = XCB_EVENT_MASK_EXPOSURE;
 	values[1] |= XCB_EVENT_MASK_KEY_PRESS;
 	values[1] |= XCB_EVENT_MASK_BUTTON_PRESS;
@@ -317,7 +329,7 @@ xcb_init(void) {
 	xcb_map_window(t.conn, t.win);
 
 	mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
-	values[0] = 0xffffff;
+	values[0] = c.fg;
 	values[1] = 0;
 	t.gc = xcb_generate_id(t.conn);
 	xcb_create_gc(t.conn, t.gc, t.win, mask, values);
@@ -326,15 +338,7 @@ xcb_init(void) {
 	resize(80, 24);
 	xcb_flush(t.conn);
 
-	/* DEBUG */
-	char a[] = "A";
-	set_cell(0, 0, a);
-	set_cell(1, 1, a);
-	set_cell(2, 1, a);
-	set_cell(3, 1, a);
-	set_cell(3, 2, a);
-
-	t.wants_redraw = 1;
+	t.cursor.x = t.cursor.y = 0;
 	redraw();
 }
 
